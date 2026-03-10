@@ -1,0 +1,56 @@
+{
+  "Remate": {
+    "impact_detection": "highest_wrist",
+    "scoring": {
+      "arm_extension": {
+        "label": "Extensión del brazo",
+        "weight": 25,
+        "ranges": [
+          { "min": 155, "multiplier": 1.0 },
+          { "min": 140, "multiplier": 0.75 },
+          { "min": 120, "multiplier": 0.50 },
+          { "min": 100, "multiplier": 0.25 }
+        ]
+      },
+      "contact_height": {
+        "label": "Altura de contacto",
+        "weight": 25,
+        "ranges": [
+          { "min": 0.08,  "multiplier": 1.0  },
+          { "min": 0.04,  "multiplier": 0.75 },
+          { "min": 0.00,  "multiplier": 0.50 },
+          { "min": -0.05, "multiplier": 0.25 }
+        ]
+      },
+      "knee_flexion": {
+        "label": "Flexión de rodillas",
+        "weight": 20,
+        "ranges": [
+          { "max": 150, "multiplier": 1.0  },
+          { "max": 160, "multiplier": 0.75 },
+          { "max": 170, "multiplier": 0.50 },
+          { "max": 178, "multiplier": 0.25 }
+        ]
+      },
+      "weight_transfer": {
+        "label": "Transferencia de peso",
+        "weight": 15,
+        "ranges": [
+          { "min": 0.06, "multiplier": 1.0  },
+          { "min": 0.03, "multiplier": 0.75 },
+          { "min": 0.01, "multiplier": 0.50 }
+        ]
+      },
+      "fluidity": {
+        "label": "Fluidez del movimiento",
+        "weight": 15,
+        "ranges": [
+          { "max": 0.004, "multiplier": 1.0  },
+          { "max": 0.010, "multiplier": 0.75 },
+          { "max": 0.020, "multiplier": 0.50 },
+          { "max": 0.035, "multiplier": 0.25 }
+        ]
+      }
+    }
+  }
+}
