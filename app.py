@@ -1,25 +1,45 @@
 import os
 import json
 import tempfile
+import urllib.request
 
 import cv2
-import mediapipe as mp
 import numpy as np
 from flask import Flask, request, jsonify
 
-app = Flask(__name__)
-mp_pose = mp.solutions.pose
+import mediapipe as mp
+from mediapipe.tasks import python as mp_python
+from mediapipe.tasks.python import vision as mp_vision
 
+app = Flask(__name__)
+
+# ─────────────────────────────────────────────
+# DESCARGA DEL MODELO AL ARRANCAR
+# ─────────────────────────────────────────────
+
+MODEL_PATH = "pose_landmarker.task"
+MODEL_URL  = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "pose_landmarker/pose_landmarker_full/float16/latest/"
+    "pose_landmarker_full.task"
+)
+
+def ensure_model():
+    if not os.path.exists(MODEL_PATH):
+        print("Descargando modelo MediaPipe...")
+        urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+        print("Modelo descargado.")
+
+ensure_model()
 
 # ─────────────────────────────────────────────
 # GEOMETRY
 # ─────────────────────────────────────────────
 
 def angle_between(a, b, c):
-    """Angle in degrees at vertex b, formed by points a-b-c."""
     a, b, c = np.array(a), np.array(b), np.array(c)
-    ba, bc = a - b, c - b
-    cos_a = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-9)
+    ba, bc  = a - b, c - b
+    cos_a   = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-9)
     return float(np.degrees(np.arccos(np.clip(cos_a, -1.0, 1.0))))
 
 
@@ -31,31 +51,31 @@ def moving_average(series, window=5):
 
 
 # ─────────────────────────────────────────────
-# LANDMARK EXTRACTION
+# LANDMARK INDICES (MediaPipe Pose)
 # ─────────────────────────────────────────────
 
-KEYS = {
-    'nose': 0,
+IDX = {
     'left_shoulder': 11,  'right_shoulder': 12,
-    'left_elbow': 13,     'right_elbow': 14,
-    'left_wrist': 15,     'right_wrist': 16,
-    'left_hip': 23,       'right_hip': 24,
-    'left_knee': 25,      'right_knee': 26,
-    'left_ankle': 27,     'right_ankle': 28,
+    'left_elbow':    13,  'right_elbow':    14,
+    'left_wrist':    15,  'right_wrist':    16,
+    'left_hip':      23,  'right_hip':      24,
+    'left_knee':     25,  'right_knee':     26,
+    'left_ankle':    27,  'right_ankle':    28,
 }
 
 
-def extract(pose_landmarks):
-    if not pose_landmarks:
+def lm_to_dict(landmarks):
+    if not landmarks:
         return None
-    lm = pose_landmarks.landmark
-    return {k: {'x': lm[i].x, 'y': lm[i].y, 'z': lm[i].z} for k, i in KEYS.items()}
+    return {
+        k: {'x': landmarks[i].x, 'y': landmarks[i].y, 'z': landmarks[i].z}
+        for k, i in IDX.items()
+    }
 
 
 def smooth_frames(frames):
-    """Apply moving-average to every coordinate of every landmark."""
     for coord in ('x', 'y', 'z'):
-        for key in KEYS:
+        for key in IDX:
             series = [f[key][coord] for f in frames]
             sm = moving_average(series)
             for i, f in enumerate(frames):
@@ -69,7 +89,7 @@ def smooth_frames(frames):
 
 def dominant_arm(frames):
     min_r = min(f['right_wrist']['y'] for f in frames)
-    min_l = min(f['left_wrist']['y'] for f in frames)
+    min_l = min(f['left_wrist']['y']  for f in frames)
     return 'right' if min_r < min_l else 'left'
 
 
@@ -81,41 +101,36 @@ def impact_frame_highest_wrist(frames, arm):
 def calc_metrics_remate(frames, impact_idx, arm, fps):
     imp = frames[impact_idx]
 
-    # 1. Arm extension (shoulder → elbow → wrist angle)
     arm_angle = angle_between(
         [imp[f'{arm}_shoulder']['x'], imp[f'{arm}_shoulder']['y']],
         [imp[f'{arm}_elbow']['x'],    imp[f'{arm}_elbow']['y']],
         [imp[f'{arm}_wrist']['x'],    imp[f'{arm}_wrist']['y']],
     )
 
-    # 2. Contact height (wrist above shoulder, positive = higher)
     contact_height = imp[f'{arm}_shoulder']['y'] - imp[f'{arm}_wrist']['y']
 
-    # 3. Knee flexion
     knee_angle = angle_between(
-        [imp[f'{arm}_hip']['x'],   imp[f'{arm}_hip']['y']],
-        [imp[f'{arm}_knee']['x'],  imp[f'{arm}_knee']['y']],
-        [imp[f'{arm}_ankle']['x'], imp[f'{arm}_ankle']['y']],
+        [imp[f'{arm}_hip']['x'],    imp[f'{arm}_hip']['y']],
+        [imp[f'{arm}_knee']['x'],   imp[f'{arm}_knee']['y']],
+        [imp[f'{arm}_ankle']['x'],  imp[f'{arm}_ankle']['y']],
     )
 
-    # 4. Weight transfer (hip-centre X displacement: prep → impact)
-    prep_idx = max(0, impact_idx - int(fps * 0.8))
-    prep = frames[prep_idx]
+    prep_idx   = max(0, impact_idx - int(fps * 0.8))
+    prep       = frames[prep_idx]
     hip_prep   = (prep['left_hip']['x']  + prep['right_hip']['x'])  / 2
     hip_impact = (imp['left_hip']['x']   + imp['right_hip']['x'])   / 2
     weight_transfer = abs(hip_impact - hip_prep)
 
-    # 5. Fluidity (std-dev of wrist-Y acceleration — lower = smoother)
-    wrist_y = [f[f'{arm}_wrist']['y'] for f in frames]
-    accel   = np.diff(np.diff(wrist_y))
-    fluidity_variance = float(np.std(accel)) if len(accel) > 1 else 0.1
+    wrist_y  = [f[f'{arm}_wrist']['y'] for f in frames]
+    accel    = np.diff(np.diff(wrist_y))
+    fluidity = float(np.std(accel)) if len(accel) > 1 else 0.1
 
     return {
         'arm_extension_angle':  round(arm_angle, 1),
         'contact_height_ratio': round(contact_height, 3),
         'knee_flexion_angle':   round(knee_angle, 1),
         'hip_displacement':     round(weight_transfer, 3),
-        'fluidity_variance':    round(fluidity_variance, 4),
+        'fluidity_variance':    round(fluidity, 4),
     }
 
 
@@ -149,7 +164,6 @@ def score_desc(value, ranges, weight):
 def compute_score(metrics, shot_config):
     scoring = shot_config['scoring']
     total, details = 0.0, {}
-
     for key, (metric_key, direction) in METRIC_MAP.items():
         if key not in scoring:
             continue
@@ -165,7 +179,6 @@ def compute_score(metrics, shot_config):
             'max':   cfg['weight'],
             'label': cfg.get('label', key),
         }
-
     return round(total), details
 
 
@@ -199,24 +212,26 @@ def analyze():
         tmp_path = tmp.name
 
     try:
-        cap = cv2.VideoCapture(tmp_path)
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        raw = []
+        cap  = cv2.VideoCapture(tmp_path)
+        fps  = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        raw  = []
 
-        with mp_pose.Pose(
-            static_image_mode=False,
-            model_complexity=1,
-            smooth_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
-        ) as pose:
+        base_options = mp_python.BaseOptions(model_asset_path=MODEL_PATH)
+        options = mp_vision.PoseLandmarkerOptions(
+            base_options=base_options,
+            running_mode=mp_vision.RunningMode.IMAGE,
+        )
+
+        with mp_vision.PoseLandmarker.create_from_options(options) as detector:
             while True:
                 ok, frame = cap.read()
                 if not ok:
                     break
                 rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                result = pose.process(rgb)
-                raw.append(extract(result.pose_landmarks))
+                mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                result = detector.detect(mp_img)
+                if result.pose_landmarks:
+                    raw.append(lm_to_dict(result.pose_landmarks[0]))
 
         cap.release()
 
