@@ -1,4 +1,5 @@
 import os
+import gc
 import json
 import tempfile
 import urllib.request
@@ -14,19 +15,19 @@ from mediapipe.tasks.python import vision as mp_vision
 app = Flask(__name__)
 
 # ─────────────────────────────────────────────
-# DESCARGA DEL MODELO AL ARRANCAR
+# MODELO LITE (mucho menos RAM que full)
 # ─────────────────────────────────────────────
 
-MODEL_PATH = "pose_landmarker.task"
+MODEL_PATH = "pose_landmarker_lite.task"
 MODEL_URL  = (
     "https://storage.googleapis.com/mediapipe-models/"
-    "pose_landmarker/pose_landmarker_full/float16/latest/"
-    "pose_landmarker_full.task"
+    "pose_landmarker/pose_landmarker_lite/float16/latest/"
+    "pose_landmarker_lite.task"
 )
 
 def ensure_model():
     if not os.path.exists(MODEL_PATH):
-        print("Descargando modelo MediaPipe...")
+        print("Descargando modelo MediaPipe lite...")
         urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
         print("Modelo descargado.")
 
@@ -51,7 +52,7 @@ def moving_average(series, window=5):
 
 
 # ─────────────────────────────────────────────
-# LANDMARK INDICES (MediaPipe Pose)
+# LANDMARK INDICES
 # ─────────────────────────────────────────────
 
 IDX = {
@@ -81,6 +82,14 @@ def smooth_frames(frames):
             for i, f in enumerate(frames):
                 f[key][coord] = sm[i]
     return frames
+
+
+def resize_frame(frame, max_width=480):
+    h, w = frame.shape[:2]
+    if w <= max_width:
+        return frame
+    scale = max_width / w
+    return cv2.resize(frame, (max_width, int(h * scale)))
 
 
 # ─────────────────────────────────────────────
@@ -215,11 +224,14 @@ def analyze():
         cap  = cv2.VideoCapture(tmp_path)
         fps  = cap.get(cv2.CAP_PROP_FPS) or 30.0
         raw  = []
+        frame_count = 0
+        FRAME_SKIP = 3  # procesa 1 de cada 3 frames
 
         base_options = mp_python.BaseOptions(model_asset_path=MODEL_PATH)
         options = mp_vision.PoseLandmarkerOptions(
             base_options=base_options,
             running_mode=mp_vision.RunningMode.IMAGE,
+            num_poses=1,
         )
 
         with mp_vision.PoseLandmarker.create_from_options(options) as detector:
@@ -227,16 +239,25 @@ def analyze():
                 ok, frame = cap.read()
                 if not ok:
                     break
+                frame_count += 1
+                if frame_count % FRAME_SKIP != 0:
+                    continue
+                frame  = resize_frame(frame, max_width=480)
                 rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
                 result = detector.detect(mp_img)
                 if result.pose_landmarks:
                     raw.append(lm_to_dict(result.pose_landmarks[0]))
+                del frame, rgb, mp_img, result
 
         cap.release()
+        gc.collect()
 
         frames = [f for f in raw if f is not None]
-        if len(frames) < 10:
+        del raw
+        gc.collect()
+
+        if len(frames) < 5:
             return jsonify({
                 'score': 0, 'metrics': {}, 'score_details': {},
                 'error': 'Could not detect body pose in video',
@@ -245,7 +266,7 @@ def analyze():
         frames     = smooth_frames(frames)
         arm        = dominant_arm(frames)
         impact_idx = impact_frame_highest_wrist(frames, arm)
-        metrics    = calc_metrics_remate(frames, impact_idx, arm, fps)
+        metrics    = calc_metrics_remate(frames, impact_idx, arm, fps / FRAME_SKIP)
         score, details = compute_score(metrics, shot_config)
 
         return jsonify({
@@ -255,7 +276,7 @@ def analyze():
             'dominant_arm':  arm,
             'impact_frame':  impact_idx,
             'total_frames':  len(frames),
-            'fps':           fps,
+            'fps':           fps / FRAME_SKIP,
         })
 
     except Exception as exc:
@@ -264,7 +285,11 @@ def analyze():
         return jsonify({'error': str(exc)}), 500
 
     finally:
-        os.unlink(tmp_path)
+        try:
+            os.unlink(tmp_path)
+        except:
+            pass
+        gc.collect()
 
 
 if __name__ == '__main__':
