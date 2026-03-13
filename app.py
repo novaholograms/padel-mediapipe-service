@@ -15,7 +15,7 @@ from mediapipe.tasks.python import vision as mp_vision
 app = Flask(__name__)
 
 # ─────────────────────────────────────────────
-# MODELO LITE (mucho menos RAM que full)
+# MODELO LITE
 # ─────────────────────────────────────────────
 
 MODEL_PATH = "pose_landmarker_lite.task"
@@ -93,7 +93,7 @@ def resize_frame(frame, max_width=480):
 
 
 # ─────────────────────────────────────────────
-# SHOT LOGIC
+# DETECCIÓN DE FASES
 # ─────────────────────────────────────────────
 
 def dominant_arm(frames):
@@ -102,34 +102,97 @@ def dominant_arm(frames):
     return 'right' if min_r < min_l else 'left'
 
 
-def impact_frame_highest_wrist(frames, arm):
+def find_impact_frame(frames, arm):
+    """Frame donde la muñeca está más alta (y mínimo)."""
     ys = [f[f'{arm}_wrist']['y'] for f in frames]
     return int(np.argmin(ys))
 
 
-def calc_metrics_remate(frames, impact_idx, arm, fps):
-    imp = frames[impact_idx]
+def find_prep_frame(frames, impact_idx, arm):
+    """
+    Frame de preparación: máxima flexión de rodilla ANTES del impacto.
+    Buscamos el frame con menor ángulo de rodilla en la primera mitad del vídeo.
+    """
+    search_end = max(1, impact_idx)
+    best_idx = 0
+    best_angle = 999.0
 
+    for i in range(search_end):
+        f = frames[i]
+        arm_side = arm
+        try:
+            angle = angle_between(
+                [f[f'{arm_side}_hip']['x'],    f[f'{arm_side}_hip']['y']],
+                [f[f'{arm_side}_knee']['x'],   f[f'{arm_side}_knee']['y']],
+                [f[f'{arm_side}_ankle']['x'],  f[f'{arm_side}_ankle']['y']],
+            )
+            if angle < best_angle:
+                best_angle = angle
+                best_idx = i
+        except Exception:
+            continue
+
+    return best_idx
+
+
+def find_followthrough_frame(frames, impact_idx):
+    """
+    Frame de seguimiento: máximo desplazamiento horizontal de cadera DESPUÉS del impacto.
+    """
+    if impact_idx >= len(frames) - 1:
+        return len(frames) - 1
+
+    hip_x_at_impact = (
+        frames[impact_idx]['left_hip']['x'] +
+        frames[impact_idx]['right_hip']['x']
+    ) / 2
+
+    best_idx = impact_idx
+    best_displacement = 0.0
+
+    for i in range(impact_idx + 1, len(frames)):
+        f = frames[i]
+        hip_x = (f['left_hip']['x'] + f['right_hip']['x']) / 2
+        displacement = abs(hip_x - hip_x_at_impact)
+        if displacement > best_displacement:
+            best_displacement = displacement
+            best_idx = i
+
+    return best_idx
+
+
+# ─────────────────────────────────────────────
+# CÁLCULO DE MÉTRICAS CON FASES
+# ─────────────────────────────────────────────
+
+def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
+    imp    = frames[impact_idx]
+    prep   = frames[prep_idx]
+    follow = frames[follow_idx]
+
+    # FASE IMPACTO — extensión del brazo
     arm_angle = angle_between(
         [imp[f'{arm}_shoulder']['x'], imp[f'{arm}_shoulder']['y']],
         [imp[f'{arm}_elbow']['x'],    imp[f'{arm}_elbow']['y']],
         [imp[f'{arm}_wrist']['x'],    imp[f'{arm}_wrist']['y']],
     )
 
+    # FASE IMPACTO — altura de contacto (muñeca sobre hombro)
     contact_height = imp[f'{arm}_shoulder']['y'] - imp[f'{arm}_wrist']['y']
 
+    # FASE PREPARACIÓN — flexión de rodillas
     knee_angle = angle_between(
-        [imp[f'{arm}_hip']['x'],    imp[f'{arm}_hip']['y']],
-        [imp[f'{arm}_knee']['x'],   imp[f'{arm}_knee']['y']],
-        [imp[f'{arm}_ankle']['x'],  imp[f'{arm}_ankle']['y']],
+        [prep[f'{arm}_hip']['x'],    prep[f'{arm}_hip']['y']],
+        [prep[f'{arm}_knee']['x'],   prep[f'{arm}_knee']['y']],
+        [prep[f'{arm}_ankle']['x'],  prep[f'{arm}_ankle']['y']],
     )
 
-    prep_idx   = max(0, impact_idx - int(fps * 0.8))
-    prep       = frames[prep_idx]
-    hip_prep   = (prep['left_hip']['x']  + prep['right_hip']['x'])  / 2
-    hip_impact = (imp['left_hip']['x']   + imp['right_hip']['x'])   / 2
-    weight_transfer = abs(hip_impact - hip_prep)
+    # FASE SEGUIMIENTO — transferencia de peso
+    hip_x_impact = (imp['left_hip']['x']    + imp['right_hip']['x'])    / 2
+    hip_x_follow = (follow['left_hip']['x'] + follow['right_hip']['x']) / 2
+    weight_transfer = abs(hip_x_follow - hip_x_impact)
 
+    # FLUIDEZ — varianza de aceleración de muñeca en toda la secuencia
     wrist_y  = [f[f'{arm}_wrist']['y'] for f in frames]
     accel    = np.diff(np.diff(wrist_y))
     fluidity = float(np.std(accel)) if len(accel) > 1 else 0.1
@@ -140,6 +203,11 @@ def calc_metrics_remate(frames, impact_idx, arm, fps):
         'knee_flexion_angle':   round(knee_angle, 1),
         'hip_displacement':     round(weight_transfer, 3),
         'fluidity_variance':    round(fluidity, 4),
+        '_phases': {
+            'prep_frame':         prep_idx,
+            'impact_frame':       impact_idx,
+            'followthrough_frame': follow_idx,
+        }
     }
 
 
@@ -221,11 +289,11 @@ def analyze():
         tmp_path = tmp.name
 
     try:
-        cap  = cv2.VideoCapture(tmp_path)
-        fps  = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        raw  = []
+        cap         = cv2.VideoCapture(tmp_path)
+        fps         = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        raw         = []
         frame_count = 0
-        FRAME_SKIP = 3  # procesa 1 de cada 3 frames
+        FRAME_SKIP  = 3
 
         base_options = mp_python.BaseOptions(model_asset_path=MODEL_PATH)
         options = mp_vision.PoseLandmarkerOptions(
@@ -263,18 +331,27 @@ def analyze():
                 'error': 'Could not detect body pose in video',
             }), 200
 
-        frames     = smooth_frames(frames)
-        arm        = dominant_arm(frames)
-        impact_idx = impact_frame_highest_wrist(frames, arm)
-        metrics    = calc_metrics_remate(frames, impact_idx, arm, fps / FRAME_SKIP)
+        frames      = smooth_frames(frames)
+        arm         = dominant_arm(frames)
+        impact_idx  = find_impact_frame(frames, arm)
+        prep_idx    = find_prep_frame(frames, impact_idx, arm)
+        follow_idx  = find_followthrough_frame(frames, impact_idx)
+
+        print(f"[Phases] prep={prep_idx} impact={impact_idx} followthrough={follow_idx} total={len(frames)}")
+
+        metrics        = calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm)
+        phases         = metrics.pop('_phases')
         score, details = compute_score(metrics, shot_config)
+
+        print(f"[Metrics] {metrics}")
+        print(f"[Score] {score}")
 
         return jsonify({
             'score':         score,
             'metrics':       metrics,
             'score_details': details,
             'dominant_arm':  arm,
-            'impact_frame':  impact_idx,
+            'phases':        phases,
             'total_frames':  len(frames),
             'fps':           fps / FRAME_SKIP,
         })
@@ -287,7 +364,7 @@ def analyze():
     finally:
         try:
             os.unlink(tmp_path)
-        except:
+        except Exception:
             pass
         gc.collect()
 
