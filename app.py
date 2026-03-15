@@ -111,7 +111,7 @@ def find_impact_frame(frames, arm):
 def find_prep_frame(frames, impact_idx, arm):
     """
     Frame de preparación: máxima flexión de rodilla ANTES del impacto.
-    Buscamos el frame con menor ángulo de rodilla en la primera mitad del vídeo.
+    Usa la rodilla con menor ángulo de cualquiera de los dos lados.
     """
     search_end = max(1, impact_idx)
     best_idx = 0
@@ -119,21 +119,20 @@ def find_prep_frame(frames, impact_idx, arm):
 
     for i in range(search_end):
         f = frames[i]
-        arm_side = arm
-        try:
-            angle = angle_between(
-                [f[f'{arm_side}_hip']['x'],    f[f'{arm_side}_hip']['y']],
-                [f[f'{arm_side}_knee']['x'],   f[f'{arm_side}_knee']['y']],
-                [f[f'{arm_side}_ankle']['x'],  f[f'{arm_side}_ankle']['y']],
-            )
-            if angle < best_angle:
-                best_angle = angle
-                best_idx = i
-        except Exception:
-            continue
+        for side in ('left', 'right'):
+            try:
+                angle = angle_between(
+                    [f[f'{side}_hip']['x'],   f[f'{side}_hip']['y']],
+                    [f[f'{side}_knee']['x'],  f[f'{side}_knee']['y']],
+                    [f[f'{side}_ankle']['x'], f[f'{side}_ankle']['y']],
+                )
+                if angle < best_angle:
+                    best_angle = angle
+                    best_idx = i
+            except Exception:
+                continue
 
     return best_idx
-
 
 def find_followthrough_frame(frames, impact_idx):
     """
