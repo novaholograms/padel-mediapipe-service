@@ -16,10 +16,10 @@
         "label": "Altura de contacto",
         "weight": 25,
         "ranges": [
-          { "min": 0.05,  "multiplier": 1.0  },
-          { "min": 0.01,  "multiplier": 0.75 },
-          { "min": -0.02, "multiplier": 0.50 },
-          { "min": -0.08, "multiplier": 0.25 }
+          { "min": 0.10,  "multiplier": 1.0  },
+          { "min": 0.05,  "multiplier": 0.75 },
+          { "min": 0.00,  "multiplier": 0.50 },
+          { "min": -0.05, "multiplier": 0.25 }
         ]
       },
       "knee_flexion": {
@@ -36,8 +36,8 @@
         "label": "Transferencia de peso",
         "weight": 15,
         "ranges": [
-          { "min": 0.05, "multiplier": 1.0  },
-          { "min": 0.02, "multiplier": 0.75 },
+          { "min": 0.05,  "multiplier": 1.0  },
+          { "min": 0.02,  "multiplier": 0.75 },
           { "min": 0.008, "multiplier": 0.50 }
         ]
       },
@@ -45,10 +45,10 @@
         "label": "Fluidez del movimiento",
         "weight": 15,
         "ranges": [
-          { "max": 0.015, "multiplier": 1.0  },
-          { "max": 0.025, "multiplier": 0.75 },
-          { "max": 0.040, "multiplier": 0.50 },
-          { "max": 0.060, "multiplier": 0.25 }
+          { "max": 0.1, "multiplier": 1.0  },
+          { "max": 0.2, "multiplier": 0.75 },
+          { "max": 0.3, "multiplier": 0.50 },
+          { "max": 0.4, "multiplier": 0.25 }
         ]
       }
     }
