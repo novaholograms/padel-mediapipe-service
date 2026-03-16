@@ -103,44 +103,16 @@ def find_impact_frame(frames, arm):
             best_idx = i
     return best_idx
 
-def find_prep_frame(frames, impact_idx, arm):
-    search_end = max(1, impact_idx)
-    best_idx = 0
-    best_angle = 999.0
-    for i in range(search_end):
-        f = frames[i]
-        for side in ('left', 'right'):
-            try:
-                angle = angle_between(
-                    [f[f'{side}_hip']['x'],   f[f'{side}_hip']['y']],
-                    [f[f'{side}_knee']['x'],  f[f'{side}_knee']['y']],
-                    [f[f'{side}_ankle']['x'], f[f'{side}_ankle']['y']],
-                )
-                if angle < best_angle:
-                    best_angle = angle
-                    best_idx = i
-            except Exception:
-                continue
-    print(f"[PrepFrame] idx={best_idx} knee_angle={round(best_angle,1)}")
-    return best_idx
+def find_prep_frame(frames, impact_idx, arm, effective_fps):
+    offset = max(1, round(effective_fps * 0.4))
+    idx = max(0, impact_idx - offset)
+    print(f"[PrepFrame] idx={idx} offset={offset}")
+    return idx
 
-def find_followthrough_frame(frames, impact_idx):
-    if impact_idx >= len(frames) - 1:
-        return len(frames) - 1
-    hip_x_at_impact = (
-        frames[impact_idx]['left_hip']['x'] +
-        frames[impact_idx]['right_hip']['x']
-    ) / 2
-    best_idx = impact_idx
-    best_displacement = 0.0
-    for i in range(impact_idx + 1, len(frames)):
-        f = frames[i]
-        hip_x = (f['left_hip']['x'] + f['right_hip']['x']) / 2
-        displacement = abs(hip_x - hip_x_at_impact)
-        if displacement > best_displacement:
-            best_displacement = displacement
-            best_idx = i
-    return best_idx
+def find_followthrough_frame(frames, impact_idx, effective_fps):
+    offset = max(1, round(effective_fps * 0.35))
+    idx = min(len(frames) - 1, impact_idx + offset)
+    return idx
 
 def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
     imp    = frames[impact_idx]
@@ -182,9 +154,9 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
         'hip_displacement':     round(weight_transfer, 3),
         'fluidity_score':       round(fluidity_score, 3),
         '_phases': {
-            'prep_frame':           prep_idx,
-            'impact_frame':         impact_idx,
-            'followthrough_frame':  follow_idx,
+            'prep_frame':          prep_idx,
+            'impact_frame':        impact_idx,
+            'followthrough_frame': follow_idx,
         }
     }
 
@@ -296,19 +268,18 @@ def analyze():
                 'error': 'Could not detect body pose in video',
             }), 200
 
-        frames     = smooth_frames(frames)
-        arm        = dominant_arm(frames, handedness)
-        impact_idx = find_impact_frame(frames, arm)
-        prep_idx   = find_prep_frame(frames, impact_idx, arm)
-        follow_idx = find_followthrough_frame(frames, impact_idx)
+        frames        = smooth_frames(frames)
+        arm           = dominant_arm(frames, handedness)
+        effective_fps = fps / FRAME_SKIP
+        impact_idx    = find_impact_frame(frames, arm)
+        prep_idx      = find_prep_frame(frames, impact_idx, arm, effective_fps)
+        follow_idx    = find_followthrough_frame(frames, impact_idx, effective_fps)
 
         print(f"[Phases] prep={prep_idx} impact={impact_idx} follow={follow_idx} total={len(frames)} arm={arm}")
 
         metrics        = calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm)
         phases         = metrics.pop('_phases')
         score, details = compute_score(metrics, shot_config)
-
-        effective_fps = fps / FRAME_SKIP
 
         return jsonify({
             'score':         score,
