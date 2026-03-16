@@ -48,7 +48,6 @@ IDX = {
     'left_hip':       23, 'right_hip':      24,
     'left_knee':      25, 'right_knee':     26,
     'left_ankle':     27, 'right_ankle':    28,
-    'nose':            0,
 }
 
 def lm_to_dict(landmarks):
@@ -119,24 +118,37 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
     prep   = frames[prep_idx]
     follow = frames[follow_idx]
 
+    # Extensión del brazo en el codo (frame de impacto)
     arm_angle = angle_between(
         [imp[f'{arm}_shoulder']['x'], imp[f'{arm}_shoulder']['y']],
         [imp[f'{arm}_elbow']['x'],    imp[f'{arm}_elbow']['y']],
         [imp[f'{arm}_wrist']['x'],    imp[f'{arm}_wrist']['y']],
     )
 
-    wrist_above_head = imp['nose']['y'] - imp[f'{arm}_wrist']['y']
+    # Altura de muñeca sobre hombro normalizada por torso
+    # Valor positivo = muñeca por encima del hombro. Más alto = mejor.
+    shoulder_y = imp[f'{arm}_shoulder']['y']
+    wrist_y    = imp[f'{arm}_wrist']['y']
+    hip_y      = (imp['left_hip']['y'] + imp['right_hip']['y']) / 2
+    torso_size = abs(hip_y - shoulder_y)
+    if torso_size > 0.01:
+        wrist_above_shoulder = (shoulder_y - wrist_y) / torso_size
+    else:
+        wrist_above_shoulder = 0.0
 
+    # Flexión de rodillas (frame de preparación)
     knee_angle = angle_between(
         [prep[f'{arm}_hip']['x'],   prep[f'{arm}_hip']['y']],
         [prep[f'{arm}_knee']['x'],  prep[f'{arm}_knee']['y']],
         [prep[f'{arm}_ankle']['x'], prep[f'{arm}_ankle']['y']],
     )
 
+    # Transferencia de peso (frame de seguimiento)
     hip_x_impact = (imp['left_hip']['x']    + imp['right_hip']['x'])    / 2
     hip_x_follow = (follow['left_hip']['x'] + follow['right_hip']['x']) / 2
     weight_transfer = abs(hip_x_follow - hip_x_impact)
 
+    # Fluidez — cambios de dirección de la muñeca entre prep e impacto
     wrist_y_segment = [f[f'{arm}_wrist']['y'] for f in frames[prep_idx:impact_idx+1]]
     if len(wrist_y_segment) > 2:
         diffs = np.diff(wrist_y_segment)
@@ -145,11 +157,11 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
     else:
         fluidity_score = 0.0
 
-    print(f"[Metrics] arm={arm_angle:.1f} wrist_above_head={wrist_above_head:.3f} knee={knee_angle:.1f} weight={weight_transfer:.3f} fluidity={fluidity_score:.3f}")
+    print(f"[Metrics] arm={arm_angle:.1f} wrist_above_shoulder={wrist_above_shoulder:.3f} knee={knee_angle:.1f} weight={weight_transfer:.3f} fluidity={fluidity_score:.3f}")
 
     return {
         'arm_extension_angle':  round(arm_angle, 1),
-        'wrist_above_head':     round(wrist_above_head, 3),
+        'wrist_above_shoulder': round(wrist_above_shoulder, 3),
         'knee_flexion_angle':   round(knee_angle, 1),
         'hip_displacement':     round(weight_transfer, 3),
         'fluidity_score':       round(fluidity_score, 3),
@@ -161,11 +173,11 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
     }
 
 METRIC_MAP = {
-    'arm_extension':   ('arm_extension_angle', 'asc'),
-    'contact_height':  ('wrist_above_head',    'asc'),
-    'knee_flexion':    ('knee_flexion_angle',  'desc'),
-    'weight_transfer': ('hip_displacement',    'asc'),
-    'fluidity':        ('fluidity_score',      'desc'),
+    'arm_extension':   ('arm_extension_angle',  'asc'),
+    'contact_height':  ('wrist_above_shoulder', 'asc'),
+    'knee_flexion':    ('knee_flexion_angle',   'desc'),
+    'weight_transfer': ('hip_displacement',     'asc'),
+    'fluidity':        ('fluidity_score',       'desc'),
 }
 
 def score_asc(value, ranges, weight):
