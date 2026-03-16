@@ -313,15 +313,23 @@ def analyze():
         phases         = metrics.pop('_phases')
         score, details = compute_score(metrics, shot_config)
 
-        return jsonify({
-            'score':         score,
-            'metrics':       metrics,
-            'score_details': details,
-            'dominant_arm':  arm,
-            'phases':        phases,
-            'total_frames':  len(frames),
-            'fps':           fps / FRAME_SKIP,
-        })
+      effective_fps = fps / FRAME_SKIP
+return jsonify({
+    'score':         score,
+    'metrics':       metrics,
+    'score_details': details,
+    'dominant_arm':  arm,
+    'phases': {
+        'prep_frame':          phases['prep_frame'],
+        'prep_second':         round(phases['prep_frame'] / effective_fps, 2),
+        'impact_frame':        phases['impact_frame'],
+        'impact_second':       round(phases['impact_frame'] / effective_fps, 2),
+        'followthrough_frame': phases['followthrough_frame'],
+        'followthrough_second': round(phases['followthrough_frame'] / effective_fps, 2),
+    },
+    'total_frames':  len(frames),
+    'effective_fps': round(effective_fps, 1),
+})
 
     except Exception as exc:
         import traceback
