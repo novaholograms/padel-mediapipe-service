@@ -55,7 +55,12 @@ def lm_to_dict(landmarks):
     if not landmarks:
         return None
     return {
-        k: {'x': landmarks[i].x, 'y': landmarks[i].y, 'z': landmarks[i].z}
+        k: {
+            'x': landmarks[i].x,
+            'y': landmarks[i].y,
+            'z': landmarks[i].z,
+            'v': landmarks[i].visibility,
+        }
         for k, i in IDX.items()
     }
 
@@ -83,8 +88,20 @@ def dominant_arm(frames, handedness=None):
     return 'right' if min_r < min_l else 'left'
 
 def find_impact_frame(frames, arm):
-    ys = [f[f'{arm}_wrist']['y'] for f in frames]
-    return int(np.argmin(ys))
+    total = len(frames)
+    start = max(1, int(total * 0.15))
+    end   = max(start + 1, int(total * 0.90))
+    best_idx = start
+    best_y   = 1.0
+    for i in range(start, end):
+        f = frames[i]
+        wrist = f[f'{arm}_wrist']
+        if wrist.get('v', 1.0) < 0.5:
+            continue
+        if wrist['y'] < best_y:
+            best_y   = wrist['y']
+            best_idx = i
+    return best_idx
 
 def find_prep_frame(frames, impact_idx, arm):
     search_end = max(1, impact_idx)
@@ -130,31 +147,24 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
     prep   = frames[prep_idx]
     follow = frames[follow_idx]
 
-    # Extensión del brazo en el codo (frame de impacto)
     arm_angle = angle_between(
         [imp[f'{arm}_shoulder']['x'], imp[f'{arm}_shoulder']['y']],
         [imp[f'{arm}_elbow']['x'],    imp[f'{arm}_elbow']['y']],
         [imp[f'{arm}_wrist']['x'],    imp[f'{arm}_wrist']['y']],
     )
 
-    # Altura de la muñeca sobre la cabeza (frame de impacto)
-    # Negativo = muñeca por encima de la nariz (bueno en un remate)
-    # y=0 es arriba en MediaPipe, por eso restamos al revés
     wrist_above_head = imp['nose']['y'] - imp[f'{arm}_wrist']['y']
 
-    # Flexión de rodillas (frame de preparación)
     knee_angle = angle_between(
         [prep[f'{arm}_hip']['x'],   prep[f'{arm}_hip']['y']],
         [prep[f'{arm}_knee']['x'],  prep[f'{arm}_knee']['y']],
         [prep[f'{arm}_ankle']['x'], prep[f'{arm}_ankle']['y']],
     )
 
-    # Transferencia de peso (frame de seguimiento)
     hip_x_impact = (imp['left_hip']['x']    + imp['right_hip']['x'])    / 2
     hip_x_follow = (follow['left_hip']['x'] + follow['right_hip']['x']) / 2
     weight_transfer = abs(hip_x_follow - hip_x_impact)
 
-    # Fluidez — cambios de dirección de la muñeca entre prep e impacto
     wrist_y_segment = [f[f'{arm}_wrist']['y'] for f in frames[prep_idx:impact_idx+1]]
     if len(wrist_y_segment) > 2:
         diffs = np.diff(wrist_y_segment)
