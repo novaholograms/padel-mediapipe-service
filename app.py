@@ -74,7 +74,7 @@ def resize_frame(frame, max_width=480):
     scale = max_width / w
     return cv2.resize(frame, (max_width, int(h * scale)))
 
-def dominant_arm(frames, handedness=none):
+def dominant_arm(frames, handedness=None):
     if handedness in ('right', 'left'):
         return handedness
     min_r = min(f['right_wrist']['y'] for f in frames)
