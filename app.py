@@ -14,10 +14,6 @@ from mediapipe.tasks.python import vision as mp_vision
 
 app = Flask(__name__)
 
-# ─────────────────────────────────────────────
-# MODELO LITE
-# ─────────────────────────────────────────────
-
 MODEL_PATH = "pose_landmarker_lite.task"
 MODEL_URL  = (
     "https://storage.googleapis.com/mediapipe-models/"
@@ -33,27 +29,17 @@ def ensure_model():
 
 ensure_model()
 
-# ─────────────────────────────────────────────
-# GEOMETRY
-# ─────────────────────────────────────────────
-
 def angle_between(a, b, c):
     a, b, c = np.array(a), np.array(b), np.array(c)
     ba, bc  = a - b, c - b
     cos_a   = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-9)
     return float(np.degrees(np.arccos(np.clip(cos_a, -1.0, 1.0))))
 
-
 def moving_average(series, window=5):
     if len(series) < window:
         return series
     kernel = np.ones(window) / window
     return np.convolve(series, kernel, mode='same').tolist()
-
-
-# ─────────────────────────────────────────────
-# LANDMARK INDICES
-# ─────────────────────────────────────────────
 
 IDX = {
     'left_shoulder': 11,  'right_shoulder': 12,
@@ -64,7 +50,6 @@ IDX = {
     'left_ankle':    27,  'right_ankle':    28,
 }
 
-
 def lm_to_dict(landmarks):
     if not landmarks:
         return None
@@ -72,7 +57,6 @@ def lm_to_dict(landmarks):
         k: {'x': landmarks[i].x, 'y': landmarks[i].y, 'z': landmarks[i].z}
         for k, i in IDX.items()
     }
-
 
 def smooth_frames(frames):
     for coord in ('x', 'y', 'z'):
@@ -83,7 +67,6 @@ def smooth_frames(frames):
                 f[key][coord] = sm[i]
     return frames
 
-
 def resize_frame(frame, max_width=480):
     h, w = frame.shape[:2]
     if w <= max_width:
@@ -91,22 +74,16 @@ def resize_frame(frame, max_width=480):
     scale = max_width / w
     return cv2.resize(frame, (max_width, int(h * scale)))
 
-
-# ─────────────────────────────────────────────
-# DETECCIÓN DE FASES
-# ─────────────────────────────────────────────
-
-def dominant_arm(frames):
+def dominant_arm(frames, handedness=none):
+    if handedness in ('right', 'left'):
+        return handedness
     min_r = min(f['right_wrist']['y'] for f in frames)
     min_l = min(f['left_wrist']['y']  for f in frames)
     return 'right' if min_r < min_l else 'left'
 
-
 def find_impact_frame(frames, arm):
-    """Frame donde la muñeca está más alta (y mínimo)."""
     ys = [f[f'{arm}_wrist']['y'] for f in frames]
     return int(np.argmin(ys))
-
 
 def find_prep_frame(frames, impact_idx, arm):
     """
@@ -132,23 +109,18 @@ def find_prep_frame(frames, impact_idx, arm):
             except Exception:
                 continue
 
+    print(f"[PrepFrame] idx={best_idx} knee_angle={round(best_angle,1)}")
     return best_idx
 
 def find_followthrough_frame(frames, impact_idx):
-    """
-    Frame de seguimiento: máximo desplazamiento horizontal de cadera DESPUÉS del impacto.
-    """
     if impact_idx >= len(frames) - 1:
         return len(frames) - 1
-
     hip_x_at_impact = (
         frames[impact_idx]['left_hip']['x'] +
         frames[impact_idx]['right_hip']['x']
     ) / 2
-
     best_idx = impact_idx
     best_displacement = 0.0
-
     for i in range(impact_idx + 1, len(frames)):
         f = frames[i]
         hip_x = (f['left_hip']['x'] + f['right_hip']['x']) / 2
@@ -156,72 +128,78 @@ def find_followthrough_frame(frames, impact_idx):
         if displacement > best_displacement:
             best_displacement = displacement
             best_idx = i
-
     return best_idx
-
-
-# ─────────────────────────────────────────────
-# CÁLCULO DE MÉTRICAS CON FASES
-# ─────────────────────────────────────────────
 
 def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
     imp    = frames[impact_idx]
     prep   = frames[prep_idx]
     follow = frames[follow_idx]
 
-    # FASE IMPACTO — extensión del brazo
+    # Extensión del brazo en el codo (frame de impacto)
     arm_angle = angle_between(
         [imp[f'{arm}_shoulder']['x'], imp[f'{arm}_shoulder']['y']],
         [imp[f'{arm}_elbow']['x'],    imp[f'{arm}_elbow']['y']],
         [imp[f'{arm}_wrist']['x'],    imp[f'{arm}_wrist']['y']],
     )
 
-    # FASE IMPACTO — altura de contacto (muñeca sobre hombro)
-    contact_height = imp[f'{arm}_shoulder']['y'] - imp[f'{arm}_wrist']['y']
+    # Verticalidad del brazo (frame de impacto)
+    # 0° = brazo perfectamente vertical hacia arriba
+    sx = imp[f'{arm}_shoulder']['x']
+    sy = imp[f'{arm}_shoulder']['y']
+    wx = imp[f'{arm}_wrist']['x']
+    wy = imp[f'{arm}_wrist']['y']
+    arm_vec  = np.array([wx - sx, wy - sy])
+    vertical = np.array([0, -1])
+    cos_a    = np.dot(arm_vec, vertical) / (np.linalg.norm(arm_vec) + 1e-9)
+    arm_vertical_angle = float(np.degrees(np.arccos(np.clip(cos_a, -1.0, 1.0))))
 
-    # FASE PREPARACIÓN — flexión de rodillas
+    # Flexión de rodillas (frame de preparación)
     knee_angle = angle_between(
-        [prep[f'{arm}_hip']['x'],    prep[f'{arm}_hip']['y']],
-        [prep[f'{arm}_knee']['x'],   prep[f'{arm}_knee']['y']],
-        [prep[f'{arm}_ankle']['x'],  prep[f'{arm}_ankle']['y']],
+        [prep[f'{arm}_hip']['x'],   prep[f'{arm}_hip']['y']],
+        [prep[f'{arm}_knee']['x'],  prep[f'{arm}_knee']['y']],
+        [prep[f'{arm}_ankle']['x'], prep[f'{arm}_ankle']['y']],
     )
 
-    # FASE SEGUIMIENTO — transferencia de peso
+    # Transferencia de peso (frame de seguimiento)
     hip_x_impact = (imp['left_hip']['x']    + imp['right_hip']['x'])    / 2
     hip_x_follow = (follow['left_hip']['x'] + follow['right_hip']['x']) / 2
     weight_transfer = abs(hip_x_follow - hip_x_impact)
 
-    # FLUIDEZ — varianza de aceleración de muñeca en toda la secuencia
-    wrist_y  = [f[f'{arm}_wrist']['y'] for f in frames]
-    accel    = np.diff(np.diff(wrist_y))
-    fluidity = float(np.std(accel)) if len(accel) > 1 else 0.1
+    # Fluidez — suavidad de la trayectoria del brazo entre preparación e impacto
+    # Calculamos cuántos cambios de dirección tiene la muñeca en Y entre prep e impacto
+    # Un movimiento fluido sube de forma continua sin cambios de dirección
+    wrist_y_segment = [f[f'{arm}_wrist']['y'] for f in frames[prep_idx:impact_idx+1]]
+    if len(wrist_y_segment) > 2:
+        diffs = np.diff(wrist_y_segment)
+        # Cambios de signo = cambios de dirección (interrupciones en el movimiento)
+        direction_changes = int(np.sum(np.diff(np.sign(diffs)) != 0))
+        # Normalizamos por la longitud del segmento
+        fluidity_score = direction_changes / max(len(wrist_y_segment), 1)
+    else:
+        fluidity_score = 0.0
+
+    print(f"[Metrics] arm={arm_angle:.1f} vertical={arm_vertical_angle:.1f} knee={knee_angle:.1f} weight={weight_transfer:.3f} fluidity_changes={fluidity_score:.3f}")
 
     return {
         'arm_extension_angle':  round(arm_angle, 1),
-        'contact_height_ratio': round(contact_height, 3),
+        'arm_vertical_angle':   round(arm_vertical_angle, 1),
         'knee_flexion_angle':   round(knee_angle, 1),
         'hip_displacement':     round(weight_transfer, 3),
-        'fluidity_variance':    round(fluidity, 4),
+        'fluidity_score':       round(fluidity_score, 3),
         '_phases': {
-            'prep_frame':         prep_idx,
-            'impact_frame':       impact_idx,
+            'prep_frame':          prep_idx,
+            'impact_frame':        impact_idx,
             'followthrough_frame': follow_idx,
         }
     }
 
-
-# ─────────────────────────────────────────────
-# SCORING ENGINE
-# ─────────────────────────────────────────────
-
 METRIC_MAP = {
-    'arm_extension':   ('arm_extension_angle',  'asc'),
-    'contact_height':  ('contact_height_ratio', 'asc'),
-    'knee_flexion':    ('knee_flexion_angle',    'desc'),
-    'weight_transfer': ('hip_displacement',      'asc'),
-    'fluidity':        ('fluidity_variance',     'desc'),
+    'arm_extension':   ('arm_extension_angle', 'asc'),
+    'arm_vertical':    ('arm_vertical_angle',  'desc'),
+    'knee_flexion':    ('knee_flexion_angle',  'desc'),
+    'weight_transfer': ('hip_displacement',    'asc'),
+    'fluidity':        ('fluidity_score',      'desc'),
 }
-
 
 def score_asc(value, ranges, weight):
     for r in ranges:
@@ -229,13 +207,11 @@ def score_asc(value, ranges, weight):
             return weight * r['multiplier']
     return 0.0
 
-
 def score_desc(value, ranges, weight):
     for r in ranges:
         if value <= r['max']:
             return weight * r['multiplier']
     return 0.0
-
 
 def compute_score(metrics, shot_config):
     scoring = shot_config['scoring']
@@ -257,15 +233,9 @@ def compute_score(metrics, shot_config):
         }
     return round(total), details
 
-
-# ─────────────────────────────────────────────
-# ROUTES
-# ─────────────────────────────────────────────
-
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({'status': 'ok', 'service': 'padel-mediapipe'})
-
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
@@ -273,7 +243,8 @@ def analyze():
     if not file:
         return jsonify({'error': 'No video file provided'}), 400
 
-    shot_type = request.form.get('shotType', 'Remate')
+    shot_type   = request.form.get('shotType', 'Remate')
+    handedness  = request.form.get('handedness', 'right')
 
     with open('shots_config.json', 'r', encoding='utf-8') as f:
         config = json.load(f)
@@ -331,19 +302,16 @@ def analyze():
             }), 200
 
         frames      = smooth_frames(frames)
-        arm         = dominant_arm(frames)
+        arm         = dominant_arm(frames, handedness)
         impact_idx  = find_impact_frame(frames, arm)
         prep_idx    = find_prep_frame(frames, impact_idx, arm)
         follow_idx  = find_followthrough_frame(frames, impact_idx)
 
-        print(f"[Phases] prep={prep_idx} impact={impact_idx} followthrough={follow_idx} total={len(frames)}")
+        print(f"[Phases] prep={prep_idx} impact={impact_idx} follow={follow_idx} total={len(frames)} arm={arm}")
 
         metrics        = calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm)
         phases         = metrics.pop('_phases')
         score, details = compute_score(metrics, shot_config)
-
-        print(f"[Metrics] {metrics}")
-        print(f"[Score] {score}")
 
         return jsonify({
             'score':         score,
@@ -366,7 +334,6 @@ def analyze():
         except Exception:
             pass
         gc.collect()
-
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
