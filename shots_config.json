@@ -6,39 +6,50 @@
         "label": "Extensión del brazo",
         "weight": 40,
         "ranges": [
-          { "min": 155, "multiplier": 1.0  },
-          { "min": 140, "multiplier": 0.75 },
-          { "min": 120, "multiplier": 0.50 },
-          { "min": 100, "multiplier": 0.25 }
+          { "min": 162, "multiplier": 1.00 },
+          { "min": 155, "multiplier": 0.85 },
+          { "min": 148, "multiplier": 0.70 },
+          { "min": 140, "multiplier": 0.55 },
+          { "min": 130, "multiplier": 0.40 },
+          { "min": 118, "multiplier": 0.25 },
+          { "min": 100, "multiplier": 0.10 }
         ]
       },
       "knee_flexion": {
         "label": "Flexión de rodillas en preparación",
         "weight": 15,
         "ranges": [
-          { "max": 130, "multiplier": 1.0  },
-          { "max": 145, "multiplier": 0.75 },
-          { "max": 158, "multiplier": 0.50 },
-          { "max": 168, "multiplier": 0.25 }
+          { "max": 115, "multiplier": 1.00 },
+          { "max": 122, "multiplier": 0.85 },
+          { "max": 130, "multiplier": 0.70 },
+          { "max": 140, "multiplier": 0.55 },
+          { "max": 150, "multiplier": 0.35 },
+          { "max": 160, "multiplier": 0.20 },
+          { "max": 170, "multiplier": 0.10 }
         ]
       },
       "weight_transfer": {
         "label": "Transferencia de peso",
         "weight": 25,
         "ranges": [
-          { "min": 0.05,  "multiplier": 1.0  },
-          { "min": 0.02,  "multiplier": 0.75 },
-          { "min": 0.008, "multiplier": 0.50 }
+          { "min": 0.12,  "multiplier": 1.00 },
+          { "min": 0.08,  "multiplier": 0.85 },
+          { "min": 0.05,  "multiplier": 0.65 },
+          { "min": 0.03,  "multiplier": 0.45 },
+          { "min": 0.015, "multiplier": 0.30 },
+          { "min": 0.005, "multiplier": 0.15 }
         ]
       },
       "fluidity": {
         "label": "Fluidez del movimiento",
         "weight": 20,
         "ranges": [
-          { "max": 0.1, "multiplier": 1.0  },
-          { "max": 0.2, "multiplier": 0.75 },
-          { "max": 0.3, "multiplier": 0.50 },
-          { "max": 0.4, "multiplier": 0.25 }
+          { "max": 0.05, "multiplier": 1.00 },
+          { "max": 0.10, "multiplier": 0.85 },
+          { "max": 0.15, "multiplier": 0.65 },
+          { "max": 0.20, "multiplier": 0.50 },
+          { "max": 0.30, "multiplier": 0.30 },
+          { "max": 0.40, "multiplier": 0.15 }
         ]
       }
     }
