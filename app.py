@@ -118,26 +118,22 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
     prep   = frames[prep_idx]
     follow = frames[follow_idx]
 
-    # Extensión del brazo en el codo (frame de impacto)
     arm_angle = angle_between(
         [imp[f'{arm}_shoulder']['x'], imp[f'{arm}_shoulder']['y']],
         [imp[f'{arm}_elbow']['x'],    imp[f'{arm}_elbow']['y']],
         [imp[f'{arm}_wrist']['x'],    imp[f'{arm}_wrist']['y']],
     )
 
-    # Flexión de rodillas (frame de preparación)
     knee_angle = angle_between(
         [prep[f'{arm}_hip']['x'],   prep[f'{arm}_hip']['y']],
         [prep[f'{arm}_knee']['x'],  prep[f'{arm}_knee']['y']],
         [prep[f'{arm}_ankle']['x'], prep[f'{arm}_ankle']['y']],
     )
 
-    # Transferencia de peso (frame de seguimiento)
     hip_x_impact = (imp['left_hip']['x']    + imp['right_hip']['x'])    / 2
     hip_x_follow = (follow['left_hip']['x'] + follow['right_hip']['x']) / 2
     weight_transfer = abs(hip_x_follow - hip_x_impact)
 
-    # Fluidez — cambios de dirección de la muñeca entre prep e impacto
     wrist_y_segment = [f[f'{arm}_wrist']['y'] for f in frames[prep_idx:impact_idx+1]]
     if len(wrist_y_segment) > 2:
         diffs = np.diff(wrist_y_segment)
@@ -148,6 +144,9 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
 
     print(f"[Metrics] arm={arm_angle:.1f} knee={knee_angle:.1f} weight={weight_transfer:.3f} fluidity={fluidity_score:.3f}")
 
+    def frame_landmarks(f):
+        return {k: {'x': round(f[k]['x'], 4), 'y': round(f[k]['y'], 4)} for k in IDX}
+
     return {
         'arm_extension_angle': round(arm_angle, 1),
         'knee_flexion_angle':  round(knee_angle, 1),
@@ -157,6 +156,11 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
             'prep_frame':          prep_idx,
             'impact_frame':        impact_idx,
             'followthrough_frame': follow_idx,
+        },
+        '_landmarks': {
+            'prep':          frame_landmarks(prep),
+            'impact':        frame_landmarks(imp),
+            'followthrough': frame_landmarks(follow),
         }
     }
 
@@ -278,6 +282,7 @@ def analyze():
 
         metrics        = calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm)
         phases         = metrics.pop('_phases')
+        landmarks      = metrics.pop('_landmarks')
         score, details = compute_score(metrics, shot_config)
 
         return jsonify({
@@ -293,6 +298,7 @@ def analyze():
                 'followthrough_frame':  phases['followthrough_frame'],
                 'followthrough_second': round(phases['followthrough_frame'] / effective_fps, 2),
             },
+            'landmarks':     landmarks,
             'total_frames':  len(frames),
             'effective_fps': round(effective_fps, 1),
         })
