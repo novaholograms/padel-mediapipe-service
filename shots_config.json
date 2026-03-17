@@ -4,7 +4,7 @@
     "scoring": {
       "arm_extension": {
         "label": "Extensión del brazo",
-        "weight": 25,
+        "weight": 40,
         "ranges": [
           { "min": 155, "multiplier": 1.0  },
           { "min": 140, "multiplier": 0.75 },
@@ -12,19 +12,9 @@
           { "min": 100, "multiplier": 0.25 }
         ]
       },
-      "contact_height": {
-        "label": "Altura de contacto",
-        "weight": 25,
-        "ranges": [
-          { "min": 1.2,  "multiplier": 1.0  },
-          { "min": 0.8,  "multiplier": 0.75 },
-          { "min": 0.4,  "multiplier": 0.50 },
-          { "min": 0.0,  "multiplier": 0.25 }
-        ]
-      },
       "knee_flexion": {
         "label": "Flexión de rodillas en preparación",
-        "weight": 20,
+        "weight": 15,
         "ranges": [
           { "max": 130, "multiplier": 1.0  },
           { "max": 145, "multiplier": 0.75 },
@@ -34,7 +24,7 @@
       },
       "weight_transfer": {
         "label": "Transferencia de peso",
-        "weight": 15,
+        "weight": 25,
         "ranges": [
           { "min": 0.05,  "multiplier": 1.0  },
           { "min": 0.02,  "multiplier": 0.75 },
@@ -43,7 +33,7 @@
       },
       "fluidity": {
         "label": "Fluidez del movimiento",
-        "weight": 15,
+        "weight": 20,
         "ranges": [
           { "max": 0.1, "multiplier": 1.0  },
           { "max": 0.2, "multiplier": 0.75 },
@@ -53,4 +43,5 @@
       }
     }
   }
+}
 }
