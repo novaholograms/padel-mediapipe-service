@@ -125,17 +125,6 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
         [imp[f'{arm}_wrist']['x'],    imp[f'{arm}_wrist']['y']],
     )
 
-    # Altura de muñeca sobre hombro normalizada por torso
-    # Valor positivo = muñeca por encima del hombro. Más alto = mejor.
-    shoulder_y = imp[f'{arm}_shoulder']['y']
-    wrist_y    = imp[f'{arm}_wrist']['y']
-    hip_y      = (imp['left_hip']['y'] + imp['right_hip']['y']) / 2
-    torso_size = abs(hip_y - shoulder_y)
-    if torso_size > 0.01:
-        wrist_above_shoulder = (shoulder_y - wrist_y) / torso_size
-    else:
-        wrist_above_shoulder = 0.0
-
     # Flexión de rodillas (frame de preparación)
     knee_angle = angle_between(
         [prep[f'{arm}_hip']['x'],   prep[f'{arm}_hip']['y']],
@@ -157,14 +146,13 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
     else:
         fluidity_score = 0.0
 
-    print(f"[Metrics] arm={arm_angle:.1f} wrist_above_shoulder={wrist_above_shoulder:.3f} knee={knee_angle:.1f} weight={weight_transfer:.3f} fluidity={fluidity_score:.3f}")
+    print(f"[Metrics] arm={arm_angle:.1f} knee={knee_angle:.1f} weight={weight_transfer:.3f} fluidity={fluidity_score:.3f}")
 
     return {
-        'arm_extension_angle':  round(arm_angle, 1),
-        'wrist_above_shoulder': round(wrist_above_shoulder, 3),
-        'knee_flexion_angle':   round(knee_angle, 1),
-        'hip_displacement':     round(weight_transfer, 3),
-        'fluidity_score':       round(fluidity_score, 3),
+        'arm_extension_angle': round(arm_angle, 1),
+        'knee_flexion_angle':  round(knee_angle, 1),
+        'hip_displacement':    round(weight_transfer, 3),
+        'fluidity_score':      round(fluidity_score, 3),
         '_phases': {
             'prep_frame':          prep_idx,
             'impact_frame':        impact_idx,
@@ -173,11 +161,10 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
     }
 
 METRIC_MAP = {
-    'arm_extension':   ('arm_extension_angle',  'asc'),
-    'contact_height':  ('wrist_above_shoulder', 'asc'),
-    'knee_flexion':    ('knee_flexion_angle',   'desc'),
-    'weight_transfer': ('hip_displacement',     'asc'),
-    'fluidity':        ('fluidity_score',       'desc'),
+    'arm_extension':   ('arm_extension_angle', 'asc'),
+    'knee_flexion':    ('knee_flexion_angle',  'desc'),
+    'weight_transfer': ('hip_displacement',    'asc'),
+    'fluidity':        ('fluidity_score',      'desc'),
 }
 
 def score_asc(value, ranges, weight):
