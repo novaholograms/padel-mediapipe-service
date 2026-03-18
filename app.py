@@ -175,13 +175,13 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
     )
 
     knee_angle = angle_between(
-        [prep['torso']['x'],           prep['torso']['y']],
-        [prep[f'{arm}_knee']['x'],     prep[f'{arm}_knee']['y']],
-        [prep[f'{arm}_foot']['x'],     prep[f'{arm}_foot']['y']],
+        [prep['torso']['x'],       prep['torso']['y']],
+        [prep[f'{arm}_knee']['x'], prep[f'{arm}_knee']['y']],
+        [prep[f'{arm}_foot']['x'], prep[f'{arm}_foot']['y']],
     )
 
-    torso_x_impact = imp['torso']['x']
-    torso_x_follow = follow['torso']['x']
+    torso_x_impact  = imp['torso']['x']
+    torso_x_follow  = follow['torso']['x']
     weight_transfer = abs(torso_x_follow - torso_x_impact)
 
     hand_key = f'{arm}_hand'
@@ -193,7 +193,8 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
     else:
         fluidity_score = 0.0
 
-    print(f"[Metrics] arm={arm_angle:.1f} knee={knee_angle:.1f} weight={weight_transfer:.3f} fluidity={fluidity_score:.3f}")
+    print(f"[YOLOv8] Análisis completado ✅")
+    print(f"[Metrics] arm_extension={arm_angle:.1f}° knee_flexion={knee_angle:.1f}° weight_transfer={weight_transfer:.3f} fluidity={fluidity_score:.3f}")
 
     def frame_landmarks(f):
         return {k: {'x': round(f[k]['x'], 4), 'y': round(f[k]['y'], 4)} for k in KP if k in f}
@@ -294,6 +295,8 @@ def analyze():
         frame_count = 0
         FRAME_SKIP  = 3
 
+        print(f"[YOLOv8] Iniciando análisis: shotType={shot_type} handedness={handedness}")
+
         while True:
             ok, frame = cap.read()
             if not ok:
@@ -309,6 +312,8 @@ def analyze():
 
         cap.release()
         gc.collect()
+
+        print(f"[YOLOv8] Frames procesados: {frame_count} total, {len(raw)} con pose detectada")
 
         frames = [f for f in raw if f is not None]
         del raw
@@ -333,6 +338,8 @@ def analyze():
         phases         = metrics.pop('_phases')
         landmarks      = metrics.pop('_landmarks')
         score, details = compute_score(metrics, shot_config)
+
+        print(f"[Score] final={score}/100")
 
         return jsonify({
             'score':         score,
