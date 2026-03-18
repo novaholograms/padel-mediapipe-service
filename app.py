@@ -8,32 +8,46 @@ import cv2
 import numpy as np
 from flask import Flask, request, jsonify
 
-import mediapipe as mp
-from mediapipe.tasks import python as mp_python
-from mediapipe.tasks.python import vision as mp_vision
-
 app = Flask(__name__)
 
-MODEL_PATH = "pose_landmarker_full.task"
-MODEL_URL  = (
-    "https://storage.googleapis.com/mediapipe-models/"
-    "pose_landmarker/pose_landmarker_full/float16/latest/"
-    "pose_landmarker_full.task"
-)
+# ─────────────────────────────────────────────
+# MODELO YOLOV8 POSE (entrenado en pádel)
+# ─────────────────────────────────────────────
+
+MODEL_PATH = "players_keypoints.pt"
+MODEL_URL  = "https://drive.google.com/uc?export=download&id=1JER4bB_SwYsGroROGMcwIc9UNgJLu7BZ"
 
 def ensure_model():
     if not os.path.exists(MODEL_PATH):
-        print("Descargando modelo MediaPipe lite...")
+        print("Descargando modelo YOLOv8 pose pádel...")
         urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
         print("Modelo descargado.")
 
 ensure_model()
 
-def angle_between(a, b, c):
-    a, b, c = np.array(a), np.array(b), np.array(c)
-    ba, bc  = a - b, c - b
-    cos_a   = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-9)
-    return float(np.degrees(np.arccos(np.clip(cos_a, -1.0, 1.0))))
+from ultralytics import YOLO
+pose_model = YOLO(MODEL_PATH)
+print("Modelo YOLOv8 pose cargado.")
+
+# ─────────────────────────────────────────────
+# KEYPOINTS (13 puntos formato pádel)
+# ─────────────────────────────────────────────
+
+KP = {
+    'left_foot':      0,
+    'right_foot':     1,
+    'torso':          2,
+    'right_shoulder': 3,
+    'left_shoulder':  4,
+    'head':           5,
+    'neck':           6,
+    'left_hand':      7,
+    'right_hand':     8,
+    'right_knee':     9,
+    'left_knee':      10,
+    'right_elbow':    11,
+    'left_elbow':     12,
+}
 
 def moving_average(series, window=5):
     if len(series) < window:
@@ -41,100 +55,143 @@ def moving_average(series, window=5):
     kernel = np.ones(window) / window
     return np.convolve(series, kernel, mode='same').tolist()
 
-IDX = {
-    'left_shoulder':  11, 'right_shoulder': 12,
-    'left_elbow':     13, 'right_elbow':    14,
-    'left_wrist':     15, 'right_wrist':    16,
-    'left_hip':       23, 'right_hip':      24,
-    'left_knee':      25, 'right_knee':     26,
-    'left_ankle':     27, 'right_ankle':    28,
-}
+def angle_between(a, b, c):
+    a, b, c = np.array(a), np.array(b), np.array(c)
+    ba, bc  = a - b, c - b
+    cos_a   = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-9)
+    return float(np.degrees(np.arccos(np.clip(cos_a, -1.0, 1.0))))
 
-def lm_to_dict(landmarks):
-    if not landmarks:
-        return None
-    return {
-        k: {
-            'x': landmarks[i].x,
-            'y': landmarks[i].y,
-            'z': landmarks[i].z,
-            'v': landmarks[i].visibility,
-        }
-        for k, i in IDX.items()
-    }
-
-def smooth_frames(frames):
-    for coord in ('x', 'y', 'z'):
-        for key in IDX:
-            series = [f[key][coord] for f in frames]
-            sm = moving_average(series)
-            for i, f in enumerate(frames):
-                f[key][coord] = sm[i]
-    return frames
-
-def resize_frame(frame, max_width=480):
+def resize_frame(frame, max_width=640):
     h, w = frame.shape[:2]
     if w <= max_width:
         return frame
     scale = max_width / w
     return cv2.resize(frame, (max_width, int(h * scale)))
 
-def dominant_arm(frames, handedness=None):
-    if handedness in ('right', 'left'):
-        return handedness
-    min_r = min(f['right_wrist']['y'] for f in frames)
-    min_l = min(f['left_wrist']['y']  for f in frames)
-    return 'right' if min_r < min_l else 'left'
+# ─────────────────────────────────────────────
+# EXTRAER LANDMARKS DE UN FRAME
+# ─────────────────────────────────────────────
+
+def extract_landmarks(frame):
+    results = pose_model(frame, verbose=False)
+    if not results or results[0].keypoints is None:
+        return None
+    kps = results[0].keypoints
+    if kps.xy is None or len(kps.xy) == 0:
+        return None
+
+    # Elegir la persona más grande (mayor área del bounding box)
+    boxes = results[0].boxes
+    if boxes is None or len(boxes) == 0:
+        return None
+
+    best_idx = 0
+    if len(boxes) > 1:
+        areas = []
+        for box in boxes.xyxy:
+            w = float(box[2] - box[0])
+            h = float(box[3] - box[1])
+            areas.append(w * h)
+        best_idx = int(np.argmax(areas))
+
+    h, w = frame.shape[:2]
+    xy = kps.xy[best_idx].cpu().numpy()
+    conf = kps.conf[best_idx].cpu().numpy() if kps.conf is not None else np.ones(len(xy))
+
+    landmarks = {}
+    for name, idx in KP.items():
+        if idx < len(xy):
+            landmarks[name] = {
+                'x': float(xy[idx][0]) / w,
+                'y': float(xy[idx][1]) / h,
+                'v': float(conf[idx]),
+            }
+    return landmarks
+
+# ─────────────────────────────────────────────
+# SMOOTH
+# ─────────────────────────────────────────────
+
+def smooth_frames(frames):
+    for coord in ('x', 'y'):
+        for key in KP:
+            series = [f[key][coord] for f in frames if key in f]
+            if len(series) < 2:
+                continue
+            sm = moving_average(series)
+            j = 0
+            for f in frames:
+                if key in f:
+                    f[key][coord] = sm[j]
+                    j += 1
+    return frames
+
+# ─────────────────────────────────────────────
+# DETECCIÓN DE FASES
+# ─────────────────────────────────────────────
+
+def dominant_arm(frames, handedness='right'):
+    return handedness
 
 def find_impact_frame(frames, arm):
     total = len(frames)
     start = max(1, int(total * 0.15))
     end   = max(start + 1, int(total * 0.90))
+    hand_key = f'{arm}_hand'
     best_idx = start
     best_y   = 1.0
     for i in range(start, end):
         f = frames[i]
-        wrist = f[f'{arm}_wrist']
-        if wrist.get('v', 1.0) < 0.5:
+        if hand_key not in f:
             continue
-        if wrist['y'] < best_y:
-            best_y   = wrist['y']
+        hand = f[hand_key]
+        if hand.get('v', 1.0) < 0.3:
+            continue
+        if hand['y'] < best_y:
+            best_y   = hand['y']
             best_idx = i
     return best_idx
 
-def find_prep_frame(frames, impact_idx, arm, effective_fps):
+def find_prep_frame(frames, impact_idx, effective_fps):
     offset = max(1, round(effective_fps * 0.4))
-    idx = max(0, impact_idx - offset)
-    print(f"[PrepFrame] idx={idx} offset={offset}")
-    return idx
+    return max(0, impact_idx - offset)
 
 def find_followthrough_frame(frames, impact_idx, effective_fps):
     offset = max(1, round(effective_fps * 0.35))
-    idx = min(len(frames) - 1, impact_idx + offset)
-    return idx
+    return min(len(frames) - 1, impact_idx + offset)
+
+# ─────────────────────────────────────────────
+# MÉTRICAS
+# ─────────────────────────────────────────────
 
 def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
     imp    = frames[impact_idx]
     prep   = frames[prep_idx]
     follow = frames[follow_idx]
 
+    # Extensión del brazo (hombro → codo → mano) en el impacto
     arm_angle = angle_between(
         [imp[f'{arm}_shoulder']['x'], imp[f'{arm}_shoulder']['y']],
         [imp[f'{arm}_elbow']['x'],    imp[f'{arm}_elbow']['y']],
-        [imp[f'{arm}_wrist']['x'],    imp[f'{arm}_wrist']['y']],
+        [imp[f'{arm}_hand']['x'],     imp[f'{arm}_hand']['y']],
     )
 
+    # Flexión de rodillas en preparación
+    knee_key = f'{arm}_knee'
     knee_angle = angle_between(
-        [prep[f'{arm}_hip']['x'],   prep[f'{arm}_hip']['y']],
-        [prep[f'{arm}_knee']['x'],  prep[f'{arm}_knee']['y']],
-        [prep[f'{arm}_ankle']['x'], prep[f'{arm}_ankle']['y']],
+        [prep['torso']['x'],        prep['torso']['y']],
+        [prep[knee_key]['x'],       prep[knee_key]['y']],
+        [prep[f'{arm}_foot']['x'],  prep[f'{arm}_foot']['y']],
     )
 
-    hip_x_impact = (imp['left_hip']['x']    + imp['right_hip']['x'])    / 2
-    hip_x_follow = (follow['left_hip']['x'] + follow['right_hip']['x']) / 2
-    weight_transfer = abs(hip_x_follow - hip_x_impact)
+    # Transferencia de peso
+    torso_x_impact = imp['torso']['x']
+    torso_x_follow = follow['torso']['x']
+    weight_transfer = abs(torso_x_follow - torso_x_impact)
 
-    wrist_y_segment = [f[f'{arm}_wrist']['y'] for f in frames[prep_idx:impact_idx+1]]
+    # Fluidez
+    hand_key = f'{arm}_hand'
+    wrist_y_segment = [f[hand_key]['y'] for f in frames[prep_idx:impact_idx+1] if hand_key in f]
     if len(wrist_y_segment) > 2:
         diffs = np.diff(wrist_y_segment)
         direction_changes = int(np.sum(np.diff(np.sign(diffs)) != 0))
@@ -145,7 +202,7 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
     print(f"[Metrics] arm={arm_angle:.1f} knee={knee_angle:.1f} weight={weight_transfer:.3f} fluidity={fluidity_score:.3f}")
 
     def frame_landmarks(f):
-        return {k: {'x': round(f[k]['x'], 4), 'y': round(f[k]['y'], 4)} for k in IDX}
+        return {k: {'x': round(f[k]['x'], 4), 'y': round(f[k]['y'], 4)} for k in KP if k in f}
 
     return {
         'arm_extension_angle': round(arm_angle, 1),
@@ -163,6 +220,10 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
             'followthrough': frame_landmarks(follow),
         }
     }
+
+# ─────────────────────────────────────────────
+# SCORING
+# ─────────────────────────────────────────────
 
 METRIC_MAP = {
     'arm_extension':   ('arm_extension_angle', 'asc'),
@@ -203,9 +264,13 @@ def compute_score(metrics, shot_config):
         }
     return round(total), details
 
+# ─────────────────────────────────────────────
+# ROUTES
+# ─────────────────────────────────────────────
+
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'padel-mediapipe'})
+    return jsonify({'status': 'ok', 'service': 'padel-yolo-pose'})
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
@@ -235,28 +300,18 @@ def analyze():
         frame_count = 0
         FRAME_SKIP  = 3
 
-        base_options = mp_python.BaseOptions(model_asset_path=MODEL_PATH)
-        options = mp_vision.PoseLandmarkerOptions(
-            base_options=base_options,
-            running_mode=mp_vision.RunningMode.IMAGE,
-            num_poses=1,
-        )
-
-        with mp_vision.PoseLandmarker.create_from_options(options) as detector:
-            while True:
-                ok, frame = cap.read()
-                if not ok:
-                    break
-                frame_count += 1
-                if frame_count % FRAME_SKIP != 0:
-                    continue
-                frame  = resize_frame(frame, max_width=480)
-                rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-                result = detector.detect(mp_img)
-                if result.pose_landmarks:
-                    raw.append(lm_to_dict(result.pose_landmarks[0]))
-                del frame, rgb, mp_img, result
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            frame_count += 1
+            if frame_count % FRAME_SKIP != 0:
+                continue
+            frame = resize_frame(frame, max_width=640)
+            lm    = extract_landmarks(frame)
+            if lm is not None:
+                raw.append(lm)
+            del frame
 
         cap.release()
         gc.collect()
@@ -275,7 +330,7 @@ def analyze():
         arm           = dominant_arm(frames, handedness)
         effective_fps = fps / FRAME_SKIP
         impact_idx    = find_impact_frame(frames, arm)
-        prep_idx      = find_prep_frame(frames, impact_idx, arm, effective_fps)
+        prep_idx      = find_prep_frame(frames, impact_idx, effective_fps)
         follow_idx    = find_followthrough_frame(frames, impact_idx, effective_fps)
 
         print(f"[Phases] prep={prep_idx} impact={impact_idx} follow={follow_idx} total={len(frames)} arm={arm}")
