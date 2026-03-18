@@ -14,11 +14,11 @@ from mediapipe.tasks.python import vision as mp_vision
 
 app = Flask(__name__)
 
-MODEL_PATH = "pose_landmarker_lite.task"
+MODEL_PATH = "pose_landmarker_full.task"
 MODEL_URL  = (
     "https://storage.googleapis.com/mediapipe-models/"
-    "pose_landmarker/pose_landmarker_lite/float16/latest/"
-    "pose_landmarker_lite.task"
+    "pose_landmarker/pose_landmarker_full/float16/latest/"
+    "pose_landmarker_full.task"
 )
 
 def ensure_model():
