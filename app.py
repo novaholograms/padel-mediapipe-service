@@ -15,7 +15,7 @@ app = Flask(__name__)
 # ─────────────────────────────────────────────
 
 MODEL_PATH = "players_keypoints.pt"
-MODEL_URL  = "https://drive.google.com/uc?export=download&id=1JER4bB_SwYsGroROGMcwIc9UNgJLu7BZ"
+MODEL_URL  = "https://huggingface.co/calvos/padel-pose-model/resolve/main/best.pt"
 
 def ensure_model():
     if not os.path.exists(MODEL_PATH):
@@ -80,7 +80,6 @@ def extract_landmarks(frame):
     if kps.xy is None or len(kps.xy) == 0:
         return None
 
-    # Elegir la persona más grande (mayor área del bounding box)
     boxes = results[0].boxes
     if boxes is None or len(boxes) == 0:
         return None
@@ -95,7 +94,7 @@ def extract_landmarks(frame):
         best_idx = int(np.argmax(areas))
 
     h, w = frame.shape[:2]
-    xy = kps.xy[best_idx].cpu().numpy()
+    xy   = kps.xy[best_idx].cpu().numpy()
     conf = kps.conf[best_idx].cpu().numpy() if kps.conf is not None else np.ones(len(xy))
 
     landmarks = {}
@@ -169,27 +168,22 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
     prep   = frames[prep_idx]
     follow = frames[follow_idx]
 
-    # Extensión del brazo (hombro → codo → mano) en el impacto
     arm_angle = angle_between(
         [imp[f'{arm}_shoulder']['x'], imp[f'{arm}_shoulder']['y']],
         [imp[f'{arm}_elbow']['x'],    imp[f'{arm}_elbow']['y']],
         [imp[f'{arm}_hand']['x'],     imp[f'{arm}_hand']['y']],
     )
 
-    # Flexión de rodillas en preparación
-    knee_key = f'{arm}_knee'
     knee_angle = angle_between(
-        [prep['torso']['x'],        prep['torso']['y']],
-        [prep[knee_key]['x'],       prep[knee_key]['y']],
-        [prep[f'{arm}_foot']['x'],  prep[f'{arm}_foot']['y']],
+        [prep['torso']['x'],           prep['torso']['y']],
+        [prep[f'{arm}_knee']['x'],     prep[f'{arm}_knee']['y']],
+        [prep[f'{arm}_foot']['x'],     prep[f'{arm}_foot']['y']],
     )
 
-    # Transferencia de peso
     torso_x_impact = imp['torso']['x']
     torso_x_follow = follow['torso']['x']
     weight_transfer = abs(torso_x_follow - torso_x_impact)
 
-    # Fluidez
     hand_key = f'{arm}_hand'
     wrist_y_segment = [f[hand_key]['y'] for f in frames[prep_idx:impact_idx+1] if hand_key in f]
     if len(wrist_y_segment) > 2:
