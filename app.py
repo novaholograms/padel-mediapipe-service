@@ -293,7 +293,7 @@ def analyze():
         fps         = cap.get(cv2.CAP_PROP_FPS) or 30.0
         raw         = []
         frame_count = 0
-        FRAME_SKIP  = 3
+        FRAME_SKIP  = 5
 
         print(f"[YOLOv8] Iniciando análisis: shotType={shot_type} handedness={handedness}")
 
