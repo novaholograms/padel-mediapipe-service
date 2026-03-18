@@ -5,3 +5,4 @@ numpy==1.26.4
 gunicorn==21.2.0
 requests==2.31.0
 ultralytics==8.3.0
+gdown==5.2.0
