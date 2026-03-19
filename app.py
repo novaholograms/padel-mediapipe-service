@@ -8,32 +8,56 @@ import cv2
 import numpy as np
 from flask import Flask, request, jsonify
 
-import mediapipe as mp
-from mediapipe.tasks import python as mp_python
-from mediapipe.tasks.python import vision as mp_vision
-
 app = Flask(__name__)
 
-MODEL_PATH = "pose_landmarker_full.task"
-MODEL_URL  = (
-    "https://storage.googleapis.com/mediapipe-models/"
-    "pose_landmarker/pose_landmarker_full/float16/latest/"
-    "pose_landmarker_full.task"
-)
+# ─────────────────────────────────────────────
+# MOVENET THUNDER TFLITE (más preciso, eficiente en CPU)
+# ─────────────────────────────────────────────
+
+MODEL_PATH = "movenet_thunder.tflite"
+MODEL_URL  = "https://tfhub.dev/google/lite-model/movenet/singlepose/thunder/tflite/float16/4?lite-format=tflite"
+INPUT_SIZE = 256
 
 def ensure_model():
     if not os.path.exists(MODEL_PATH):
-        print("Descargando modelo MediaPipe full...")
+        print("Descargando MoveNet Thunder...")
         urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
         print("Modelo descargado.")
 
 ensure_model()
 
-def angle_between(a, b, c):
-    a, b, c = np.array(a), np.array(b), np.array(c)
-    ba, bc  = a - b, c - b
-    cos_a   = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-9)
-    return float(np.degrees(np.arccos(np.clip(cos_a, -1.0, 1.0))))
+import tensorflow as tf
+interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
+interpreter.allocate_tensors()
+input_details  = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
+print("MoveNet Thunder cargado.")
+
+# ─────────────────────────────────────────────
+# KEYPOINTS (17 puntos COCO)
+# ─────────────────────────────────────────────
+
+IDX = {
+    'nose':           0,
+    'left_eye':       1,
+    'right_eye':      2,
+    'left_ear':       3,
+    'right_ear':      4,
+    'left_shoulder':  5,
+    'right_shoulder': 6,
+    'left_elbow':     7,
+    'right_elbow':    8,
+    'left_wrist':     9,
+    'right_wrist':    10,
+    'left_hip':       11,
+    'right_hip':      12,
+    'left_knee':      13,
+    'right_knee':     14,
+    'left_ankle':     15,
+    'right_ankle':    16,
+}
+
+POSE_KEYS = [k for k in IDX if k not in ('nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear')]
 
 def moving_average(series, window=5):
     if len(series) < window:
@@ -41,100 +65,120 @@ def moving_average(series, window=5):
     kernel = np.ones(window) / window
     return np.convolve(series, kernel, mode='same').tolist()
 
-IDX = {
-    'left_shoulder':  11, 'right_shoulder': 12,
-    'left_elbow':     13, 'right_elbow':    14,
-    'left_wrist':     15, 'right_wrist':    16,
-    'left_hip':       23, 'right_hip':      24,
-    'left_knee':      25, 'right_knee':     26,
-    'left_ankle':     27, 'right_ankle':    28,
-}
+def angle_between(a, b, c):
+    a, b, c = np.array(a), np.array(b), np.array(c)
+    ba, bc  = a - b, c - b
+    cos_a   = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-9)
+    return float(np.degrees(np.arccos(np.clip(cos_a, -1.0, 1.0))))
 
-def lm_to_dict(landmarks):
-    if not landmarks:
-        return None
-    return {
-        k: {
-            'x': landmarks[i].x,
-            'y': landmarks[i].y,
-            'z': landmarks[i].z,
-            'v': landmarks[i].visibility,
+def resize_frame(frame, size=INPUT_SIZE):
+    return cv2.resize(frame, (size, size))
+
+# ─────────────────────────────────────────────
+# INFERENCIA MOVENET
+# ─────────────────────────────────────────────
+
+def run_movenet(frame):
+    rgb      = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    resized  = resize_frame(rgb)
+    input_t  = np.expand_dims(resized, axis=0).astype(np.uint8)
+    interpreter.set_tensor(input_details[0]['index'], input_t)
+    interpreter.invoke()
+    output   = interpreter.get_tensor(output_details[0]['index'])
+    return output[0][0]  # shape: [17, 3] — y, x, confidence
+
+def extract_landmarks(frame):
+    keypoints = run_movenet(frame)
+    landmarks = {}
+    for name, idx in IDX.items():
+        y, x, conf = keypoints[idx]
+        landmarks[name] = {
+            'x': float(x),
+            'y': float(y),
+            'v': float(conf),
         }
-        for k, i in IDX.items()
-    }
+    return landmarks
+
+# ─────────────────────────────────────────────
+# SMOOTH
+# ─────────────────────────────────────────────
 
 def smooth_frames(frames):
-    for coord in ('x', 'y', 'z'):
+    for coord in ('x', 'y'):
         for key in IDX:
-            series = [f[key][coord] for f in frames]
+            series = [f[key][coord] for f in frames if key in f]
+            if len(series) < 2:
+                continue
             sm = moving_average(series)
-            for i, f in enumerate(frames):
-                f[key][coord] = sm[i]
+            j = 0
+            for f in frames:
+                if key in f:
+                    f[key][coord] = sm[j]
+                    j += 1
     return frames
 
-def resize_frame(frame, max_width=480):
-    h, w = frame.shape[:2]
-    if w <= max_width:
-        return frame
-    scale = max_width / w
-    return cv2.resize(frame, (max_width, int(h * scale)))
-
-def dominant_arm(frames, handedness=None):
-    if handedness in ('right', 'left'):
-        return handedness
-    min_r = min(f['right_wrist']['y'] for f in frames)
-    min_l = min(f['left_wrist']['y']  for f in frames)
-    return 'right' if min_r < min_l else 'left'
+# ─────────────────────────────────────────────
+# DETECCIÓN DE FASES
+# ─────────────────────────────────────────────
 
 def find_impact_frame(frames, arm):
     total = len(frames)
     start = max(1, int(total * 0.15))
     end   = max(start + 1, int(total * 0.90))
+    wrist_key = f'{arm}_wrist'
     best_idx = start
     best_y   = 1.0
     for i in range(start, end):
         f = frames[i]
-        wrist = f[f'{arm}_wrist']
-        if wrist.get('v', 1.0) < 0.5:
+        if wrist_key not in f:
+            continue
+        wrist = f[wrist_key]
+        if wrist.get('v', 1.0) < 0.3:
             continue
         if wrist['y'] < best_y:
             best_y   = wrist['y']
             best_idx = i
     return best_idx
 
-def find_prep_frame(frames, impact_idx, arm, effective_fps):
+def find_prep_frame(frames, impact_idx, effective_fps):
     offset = max(1, round(effective_fps * 0.4))
-    idx = max(0, impact_idx - offset)
-    print(f"[PrepFrame] idx={idx} offset={offset}")
-    return idx
+    return max(0, impact_idx - offset)
 
 def find_followthrough_frame(frames, impact_idx, effective_fps):
     offset = max(1, round(effective_fps * 0.35))
-    idx = min(len(frames) - 1, impact_idx + offset)
-    return idx
+    return min(len(frames) - 1, impact_idx + offset)
+
+# ─────────────────────────────────────────────
+# MÉTRICAS
+# ─────────────────────────────────────────────
 
 def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
     imp    = frames[impact_idx]
     prep   = frames[prep_idx]
     follow = frames[follow_idx]
 
+    # Extensión del brazo (hombro → codo → muñeca) en el impacto
     arm_angle = angle_between(
         [imp[f'{arm}_shoulder']['x'], imp[f'{arm}_shoulder']['y']],
         [imp[f'{arm}_elbow']['x'],    imp[f'{arm}_elbow']['y']],
         [imp[f'{arm}_wrist']['x'],    imp[f'{arm}_wrist']['y']],
     )
 
+    # Flexión de rodillas en preparación
     knee_angle = angle_between(
-        [prep[f'{arm}_hip']['x'],   prep[f'{arm}_hip']['y']],
-        [prep[f'{arm}_knee']['x'],  prep[f'{arm}_knee']['y']],
-        [prep[f'{arm}_ankle']['x'], prep[f'{arm}_ankle']['y']],
+        [prep[f'{arm}_hip']['x'],    prep[f'{arm}_hip']['y']],
+        [prep[f'{arm}_knee']['x'],   prep[f'{arm}_knee']['y']],
+        [prep[f'{arm}_ankle']['x'],  prep[f'{arm}_ankle']['y']],
     )
 
+    # Transferencia de peso
     hip_x_impact = (imp['left_hip']['x']    + imp['right_hip']['x'])    / 2
     hip_x_follow = (follow['left_hip']['x'] + follow['right_hip']['x']) / 2
     weight_transfer = abs(hip_x_follow - hip_x_impact)
 
-    wrist_y_segment = [f[f'{arm}_wrist']['y'] for f in frames[prep_idx:impact_idx+1]]
+    # Fluidez
+    wrist_key = f'{arm}_wrist'
+    wrist_y_segment = [f[wrist_key]['y'] for f in frames[prep_idx:impact_idx+1] if wrist_key in f]
     if len(wrist_y_segment) > 2:
         diffs = np.diff(wrist_y_segment)
         direction_changes = int(np.sum(np.diff(np.sign(diffs)) != 0))
@@ -142,10 +186,10 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
     else:
         fluidity_score = 0.0
 
-    print(f"[Metrics] arm={arm_angle:.1f} knee={knee_angle:.1f} weight={weight_transfer:.3f} fluidity={fluidity_score:.3f}")
+    print(f"[MoveNet] arm={arm_angle:.1f}° knee={knee_angle:.1f}° weight={weight_transfer:.3f} fluidity={fluidity_score:.3f}")
 
     def frame_landmarks(f):
-        return {k: {'x': round(f[k]['x'], 4), 'y': round(f[k]['y'], 4)} for k in IDX}
+        return {k: {'x': round(f[k]['x'], 4), 'y': round(f[k]['y'], 4)} for k in POSE_KEYS if k in f}
 
     return {
         'arm_extension_angle': round(arm_angle, 1),
@@ -163,6 +207,10 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
             'followthrough': frame_landmarks(follow),
         }
     }
+
+# ─────────────────────────────────────────────
+# SCORING
+# ─────────────────────────────────────────────
 
 METRIC_MAP = {
     'arm_extension':   ('arm_extension_angle', 'asc'),
@@ -203,9 +251,13 @@ def compute_score(metrics, shot_config):
         }
     return round(total), details
 
+# ─────────────────────────────────────────────
+# ROUTES
+# ─────────────────────────────────────────────
+
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'padel-mediapipe'})
+    return jsonify({'status': 'ok', 'service': 'padel-movenet'})
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
@@ -215,6 +267,7 @@ def analyze():
 
     shot_type  = request.form.get('shotType', 'Remate')
     handedness = request.form.get('handedness', 'right')
+    arm        = handedness
 
     with open('shots_config.json', 'r', encoding='utf-8') as f:
         config = json.load(f)
@@ -235,31 +288,24 @@ def analyze():
         frame_count = 0
         FRAME_SKIP  = 3
 
-        base_options = mp_python.BaseOptions(model_asset_path=MODEL_PATH)
-        options = mp_vision.PoseLandmarkerOptions(
-            base_options=base_options,
-            running_mode=mp_vision.RunningMode.IMAGE,
-            num_poses=1,
-        )
+        print(f"[MoveNet] Iniciando análisis: shotType={shot_type} arm={arm}")
 
-        with mp_vision.PoseLandmarker.create_from_options(options) as detector:
-            while True:
-                ok, frame = cap.read()
-                if not ok:
-                    break
-                frame_count += 1
-                if frame_count % FRAME_SKIP != 0:
-                    continue
-                frame  = resize_frame(frame, max_width=480)
-                rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-                result = detector.detect(mp_img)
-                if result.pose_landmarks:
-                    raw.append(lm_to_dict(result.pose_landmarks[0]))
-                del frame, rgb, mp_img, result
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            frame_count += 1
+            if frame_count % FRAME_SKIP != 0:
+                continue
+            lm = extract_landmarks(frame)
+            if lm is not None:
+                raw.append(lm)
+            del frame
 
         cap.release()
         gc.collect()
+
+        print(f"[MoveNet] Frames procesados: {frame_count} total, {len(raw)} con pose")
 
         frames = [f for f in raw if f is not None]
         del raw
@@ -272,22 +318,19 @@ def analyze():
             }), 200
 
         frames        = smooth_frames(frames)
-        arm           = dominant_arm(frames, handedness)
         effective_fps = fps / FRAME_SKIP
         impact_idx    = find_impact_frame(frames, arm)
-        prep_idx      = find_prep_frame(frames, impact_idx, arm, effective_fps)
+        prep_idx      = find_prep_frame(frames, impact_idx, effective_fps)
         follow_idx    = find_followthrough_frame(frames, impact_idx, effective_fps)
 
-        print(f"[Phases] prep={prep_idx} impact={impact_idx} follow={follow_idx} total={len(frames)} arm={arm}")
+        print(f"[Phases] prep={prep_idx}({round(prep_idx/effective_fps,2)}s) impact={impact_idx}({round(impact_idx/effective_fps,2)}s) follow={follow_idx}({round(follow_idx/effective_fps,2)}s)")
 
         metrics        = calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm)
         phases         = metrics.pop('_phases')
         landmarks      = metrics.pop('_landmarks')
         score, details = compute_score(metrics, shot_config)
 
-        print(f"[Score] final={score}/100")
-
-        effective_fps = fps / FRAME_SKIP
+        print(f"[Score] {score}/100")
 
         return jsonify({
             'score':         score,
