@@ -2,22 +2,9 @@
   "Remate": {
     "impact_detection": "highest_wrist",
     "scoring": {
-      "arm_extension": {
-        "label": "Extensión del brazo",
-        "weight": 40,
-        "ranges": [
-          { "min": 162, "multiplier": 1.00 },
-          { "min": 155, "multiplier": 0.85 },
-          { "min": 148, "multiplier": 0.70 },
-          { "min": 140, "multiplier": 0.55 },
-          { "min": 130, "multiplier": 0.40 },
-          { "min": 118, "multiplier": 0.25 },
-          { "min": 100, "multiplier": 0.10 }
-        ]
-      },
       "knee_flexion": {
         "label": "Flexión de rodillas en preparación",
-        "weight": 15,
+        "weight": 35,
         "ranges": [
           { "max": 115, "multiplier": 1.00 },
           { "max": 122, "multiplier": 0.85 },
@@ -30,7 +17,7 @@
       },
       "weight_transfer": {
         "label": "Transferencia de peso",
-        "weight": 25,
+        "weight": 35,
         "ranges": [
           { "min": 0.12,  "multiplier": 1.00 },
           { "min": 0.08,  "multiplier": 0.85 },
@@ -42,7 +29,7 @@
       },
       "fluidity": {
         "label": "Fluidez del movimiento",
-        "weight": 20,
+        "weight": 30,
         "ranges": [
           { "max": 0.05, "multiplier": 1.00 },
           { "max": 0.10, "multiplier": 0.85 },
