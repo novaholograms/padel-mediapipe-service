@@ -26,9 +26,9 @@ def ensure_model():
 
 ensure_model()
 
-# Lazy loading — TensorFlow carga en la primera petición
-_interpreter = None
-_input_details = None
+# Lazy loading
+_interpreter    = None
+_input_details  = None
 _output_details = None
 
 def get_interpreter():
@@ -130,23 +130,45 @@ def smooth_frames(frames):
 # ─────────────────────────────────────────────
 
 def find_impact_frame(frames, arm):
-    total = len(frames)
-    start = max(1, int(total * 0.15))
-    end   = max(start + 1, int(total * 0.90))
-    wrist_key = f'{arm}_wrist'
-    best_idx = start
-    best_y   = 1.0
+    total        = len(frames)
+    start        = max(1, int(total * 0.15))
+    end          = max(start + 1, int(total * 0.90))
+    wrist_key    = f'{arm}_wrist'
+    shoulder_key = f'{arm}_shoulder'
+    hip_key      = f'{arm}_hip'
+
+    velocities = []
     for i in range(start, end):
-        f = frames[i]
-        if wrist_key not in f:
+        if i == 0:
+            velocities.append(0.0)
             continue
-        wrist = f[wrist_key]
-        if wrist.get('v', 1.0) < 0.3:
+        f_curr = frames[i]
+        f_prev = frames[i - 1]
+
+        if wrist_key not in f_curr or wrist_key not in f_prev:
+            velocities.append(0.0)
             continue
-        if wrist['y'] < best_y:
-            best_y   = wrist['y']
-            best_idx = i
-    return best_idx
+
+        if f_curr[wrist_key].get('v', 1.0) < 0.3:
+            velocities.append(0.0)
+            continue
+
+        dx = f_curr[wrist_key]['x'] - f_prev[wrist_key]['x']
+        dy = f_curr[wrist_key]['y'] - f_prev[wrist_key]['y']
+        raw_velocity = np.sqrt(dx**2 + dy**2)
+
+        torso_size = 0.1
+        if shoulder_key in f_curr and hip_key in f_curr:
+            ds = f_curr[shoulder_key]['y'] - f_curr[hip_key]['y']
+            torso_size = max(abs(ds), 0.01)
+
+        velocities.append(raw_velocity / torso_size)
+
+    if not velocities or max(velocities) == 0:
+        return start
+
+    best_local = int(np.argmax(velocities))
+    return start + best_local
 
 def find_prep_frame(frames, impact_idx, effective_fps):
     offset = max(1, round(effective_fps * 0.4))
@@ -217,7 +239,6 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
 # ─────────────────────────────────────────────
 
 METRIC_MAP = {
-    'arm_extension':   ('arm_extension_angle', 'asc'),
     'knee_flexion':    ('knee_flexion_angle',  'desc'),
     'weight_transfer': ('hip_displacement',    'asc'),
     'fluidity':        ('fluidity_score',      'desc'),
