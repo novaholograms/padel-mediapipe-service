@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 # ─────────────────────────────────────────────
-# MOVENET THUNDER TFLITE (más preciso, eficiente en CPU)
+# MOVENET THUNDER TFLITE
 # ─────────────────────────────────────────────
 
 MODEL_PATH = "movenet_thunder.tflite"
@@ -26,12 +26,22 @@ def ensure_model():
 
 ensure_model()
 
-import tensorflow as tf
-interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
-interpreter.allocate_tensors()
-input_details  = interpreter.get_input_details()
-output_details = interpreter.get_output_details()
-print("MoveNet Thunder cargado.")
+# Lazy loading — TensorFlow carga en la primera petición
+_interpreter = None
+_input_details = None
+_output_details = None
+
+def get_interpreter():
+    global _interpreter, _input_details, _output_details
+    if _interpreter is None:
+        print("Cargando MoveNet Thunder...")
+        import tensorflow as tf
+        _interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
+        _interpreter.allocate_tensors()
+        _input_details  = _interpreter.get_input_details()
+        _output_details = _interpreter.get_output_details()
+        print("MoveNet Thunder cargado.")
+    return _interpreter, _input_details, _output_details
 
 # ─────────────────────────────────────────────
 # KEYPOINTS (17 puntos COCO)
@@ -71,21 +81,19 @@ def angle_between(a, b, c):
     cos_a   = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-9)
     return float(np.degrees(np.arccos(np.clip(cos_a, -1.0, 1.0))))
 
-def resize_frame(frame, size=INPUT_SIZE):
-    return cv2.resize(frame, (size, size))
-
 # ─────────────────────────────────────────────
 # INFERENCIA MOVENET
 # ─────────────────────────────────────────────
 
 def run_movenet(frame):
-    rgb      = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    resized  = resize_frame(rgb)
-    input_t  = np.expand_dims(resized, axis=0).astype(np.uint8)
-    interpreter.set_tensor(input_details[0]['index'], input_t)
-    interpreter.invoke()
-    output   = interpreter.get_tensor(output_details[0]['index'])
-    return output[0][0]  # shape: [17, 3] — y, x, confidence
+    interp, input_details, output_details = get_interpreter()
+    rgb     = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    resized = cv2.resize(rgb, (INPUT_SIZE, INPUT_SIZE))
+    input_t = np.expand_dims(resized, axis=0).astype(np.uint8)
+    interp.set_tensor(input_details[0]['index'], input_t)
+    interp.invoke()
+    output  = interp.get_tensor(output_details[0]['index'])
+    return output[0][0]
 
 def extract_landmarks(frame):
     keypoints = run_movenet(frame)
@@ -157,26 +165,22 @@ def calc_metrics_remate(frames, impact_idx, prep_idx, follow_idx, arm):
     prep   = frames[prep_idx]
     follow = frames[follow_idx]
 
-    # Extensión del brazo (hombro → codo → muñeca) en el impacto
     arm_angle = angle_between(
         [imp[f'{arm}_shoulder']['x'], imp[f'{arm}_shoulder']['y']],
         [imp[f'{arm}_elbow']['x'],    imp[f'{arm}_elbow']['y']],
         [imp[f'{arm}_wrist']['x'],    imp[f'{arm}_wrist']['y']],
     )
 
-    # Flexión de rodillas en preparación
     knee_angle = angle_between(
-        [prep[f'{arm}_hip']['x'],    prep[f'{arm}_hip']['y']],
-        [prep[f'{arm}_knee']['x'],   prep[f'{arm}_knee']['y']],
-        [prep[f'{arm}_ankle']['x'],  prep[f'{arm}_ankle']['y']],
+        [prep[f'{arm}_hip']['x'],   prep[f'{arm}_hip']['y']],
+        [prep[f'{arm}_knee']['x'],  prep[f'{arm}_knee']['y']],
+        [prep[f'{arm}_ankle']['x'], prep[f'{arm}_ankle']['y']],
     )
 
-    # Transferencia de peso
     hip_x_impact = (imp['left_hip']['x']    + imp['right_hip']['x'])    / 2
     hip_x_follow = (follow['left_hip']['x'] + follow['right_hip']['x']) / 2
     weight_transfer = abs(hip_x_follow - hip_x_impact)
 
-    # Fluidez
     wrist_key = f'{arm}_wrist'
     wrist_y_segment = [f[wrist_key]['y'] for f in frames[prep_idx:impact_idx+1] if wrist_key in f]
     if len(wrist_y_segment) > 2:
@@ -288,7 +292,7 @@ def analyze():
         frame_count = 0
         FRAME_SKIP  = 3
 
-        print(f"[MoveNet] Iniciando análisis: shotType={shot_type} arm={arm}")
+        print(f"[MoveNet] Iniciando: shotType={shot_type} arm={arm}")
 
         while True:
             ok, frame = cap.read()
@@ -305,7 +309,7 @@ def analyze():
         cap.release()
         gc.collect()
 
-        print(f"[MoveNet] Frames procesados: {frame_count} total, {len(raw)} con pose")
+        print(f"[MoveNet] Frames: {frame_count} total, {len(raw)} con pose")
 
         frames = [f for f in raw if f is not None]
         del raw
